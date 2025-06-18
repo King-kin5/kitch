@@ -1,0 +1,57 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+main
+
+# Build and output directories
+/bin/
+/build/
+/dist/
+/tmp/
+/tmp/*
+
+# Dependency directories (if any)
+vendor/
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Environment and config files
+.env
+.env.*
+*.local
+
+# Logs
+*.log
+logs/
+log/
+
+# Coverage files
+*.coverprofile
+*.cov
+coverage.out
+
+# Docker
+docker-compose.override.yml
+
+# Node (for frontend)
+web/node_modules/
+web/dist/
+web/build/
+
+# Misc
+*.pid
