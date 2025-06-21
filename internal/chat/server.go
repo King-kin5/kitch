@@ -2,10 +2,11 @@ package chat
 
 import (
 	"encoding/json"
-	"log"
 	"math/rand"
 	"sync"
 	"time"
+
+	utils "kitch/pkg/utils"
 
 	"github.com/gorilla/websocket"
 )
@@ -131,14 +132,14 @@ func (c *Client) ReadPump() {
 		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("error: %v", err)
+				utils.Logger.Errorf("WebSocket read error: %v", err)
 			}
 			break
 		}
 
 		var msg Message
 		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Printf("error unmarshaling message: %v", err)
+			utils.Logger.Errorf("Error unmarshaling message: %v", err)
 			continue
 		}
 
@@ -178,11 +179,12 @@ func (c *Client) WritePump() {
 func messageToBytes(msg *Message) []byte {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("error marshaling message: %v", err)
+		utils.Logger.Errorf("Error marshaling message: %v", err)
 		return nil
 	}
 	return data
 }
+
 func generateMessageID() string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, 6)

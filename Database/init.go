@@ -32,7 +32,7 @@ func GetPostgresDB(config *configs.Config) (*sql.DB, error) {
 		dbInstance = db
 
 		// Create all user-related tables
-		if err := schema.CreateAllUserTables(db); err != nil {
+		if err := schema.CreateAllTables(db); err != nil {
 			dbInstanceError = fmt.Errorf("failed to create user tables: %v", err)
 			dbInstance = nil
 			return

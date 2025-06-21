@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kitch Authentication Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="email"], input[type="password"], input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button.secondary {
+            background-color: #6c757d;
+        }
+        button.secondary:hover {
+            background-color: #545b62;
+        }
+        .response {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .info {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .section h3 {
+            margin-top: 0;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Kitch Authentication Test</h1>
+        <p>This page demonstrates HTTP-only cookie authentication. The JWT tokens are stored securely in HTTP-only cookies and cannot be accessed by JavaScript.</p>
+
+        <div class="section">
+            <h3>📝 Registration</h3>
+            <form id="registerForm">
+                <div class="form-group">
+                    <label for="regUsername">Username:</label>
+                    <input type="text" id="regUsername" name="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="regEmail">Email:</label>
+                    <input type="email" id="regEmail" name="email" required>
+                </div>
+                <div class="form-group">
+                    <label for="regPassword">Password:</label>
+                    <input type="password" id="regPassword" name="password" required>
+                </div>
+                <button type="submit">Register</button>
+            </form>
+            <div id="registerResponse" class="response" style="display: none;"></div>
+        </div>
+
+        <div class="section">
+            <h3>🔑 Login</h3>
+            <form id="loginForm">
+                <div class="form-group">
+                    <label for="loginEmail">Email:</label>
+                    <input type="email" id="loginEmail" name="email" required>
+                </div>
+                <div class="form-group">
+                    <label for="loginPassword">Password:</label>
+                    <input type="password" id="loginPassword" name="password" required>
+                </div>
+                <button type="submit">Login</button>
+            </form>
+            <div id="loginResponse" class="response" style="display: none;"></div>
+        </div>
+
+        <div class="section">
+            <h3>🔄 Token Management</h3>
+            <button onclick="refreshToken()">Refresh Token</button>
+            <button onclick="logout()" class="secondary">Logout</button>
+            <div id="tokenResponse" class="response" style="display: none;"></div>
+        </div>
+
+        <div class="section">
+            <h3>👤 Protected Endpoints</h3>
+            <button onclick="getProfile()">Get Profile</button>
+            <button onclick="getStreams()">Get Streams</button>
+            <div id="protectedResponse" class="response" style="display: none;"></div>
+        </div>
+
+        <div class="section">
+            <h3>🍪 Cookie Information</h3>
+            <p><strong>Note:</strong> HTTP-only cookies cannot be read by JavaScript for security reasons. This is the intended behavior.</p>
+            <button onclick="checkCookies()">Check Cookies (will show empty)</button>
+            <div id="cookieResponse" class="response info" style="display: none;">
+                HTTP-only cookies are not accessible via JavaScript. This is a security feature that prevents XSS attacks.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8080/api/v1';
+
+        // Helper function to show responses
+        function showResponse(elementId, data, isError = false) {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            element.className = `response ${isError ? 'error' : 'success'}`;
+            element.textContent = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
+        }
+
+        // Helper function to make API calls
+        async function apiCall(endpoint, options = {}) {
+            const url = `${API_BASE}${endpoint}`;
+            const defaultOptions = {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                credentials: 'include', // Important: This ensures cookies are sent
+            };
+
+            const finalOptions = { ...defaultOptions, ...options };
+            
+            try {
+                const response = await fetch(url, finalOptions);
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || `HTTP ${response.status}`);
+                }
+                
+                return data;
+            } catch (error) {
+                throw error;
+            }
+        }
+
+        // Registration
+        document.getElementById('registerForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const data = {
+                username: formData.get('username'),
+                email: formData.get('email'),
+                password: formData.get('password')
+            };
+
+            try {
+                const response = await apiCall('/auth/register', {
+                    method: 'POST',
+                    body: JSON.stringify(data)
+                });
+                showResponse('registerResponse', response);
+            } catch (error) {
+                showResponse('registerResponse', `Error: ${error.message}`, true);
+            }
+        });
+
+        // Login
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const data = {
+                email: formData.get('email'),
+                password: formData.get('password')
+            };
+
+            try {
+                const response = await apiCall('/auth/login', {
+                    method: 'POST',
+                    body: JSON.stringify(data)
+                });
+                showResponse('loginResponse', response);
+            } catch (error) {
+                showResponse('loginResponse', `Error: ${error.message}`, true);
+            }
+        });
+
+        // Refresh token
+        async function refreshToken() {
+            try {
+                const response = await apiCall('/auth/refresh-token', {
+                    method: 'POST'
+                });
+                showResponse('tokenResponse', response);
+            } catch (error) {
+                showResponse('tokenResponse', `Error: ${error.message}`, true);
+            }
+        }
+
+        // Logout
+        async function logout() {
+            try {
+                const response = await apiCall('/auth/logout', {
+                    method: 'POST'
+                });
+                showResponse('tokenResponse', response);
+            } catch (error) {
+                showResponse('tokenResponse', `Error: ${error.message}`, true);
+            }
+        }
+
+        // Get profile
+        async function getProfile() {
+            try {
+                const response = await apiCall('/users/profile');
+                showResponse('protectedResponse', response);
+            } catch (error) {
+                showResponse('protectedResponse', `Error: ${error.message}`, true);
+            }
+        }
+
+        // Get streams
+        async function getStreams() {
+            try {
+                const response = await apiCall('/streams/');
+                showResponse('protectedResponse', response);
+            } catch (error) {
+                showResponse('protectedResponse', `Error: ${error.message}`, true);
+            }
+        }
+
+        // Check cookies (will show empty due to HttpOnly)
+        function checkCookies() {
+            const cookies = document.cookie;
+            const element = document.getElementById('cookieResponse');
+            element.style.display = 'block';
+            element.textContent = `Available cookies: ${cookies || 'None (HttpOnly cookies are not accessible via JavaScript)'}`;
+        }
+    </script>
+</body>
+</html> 

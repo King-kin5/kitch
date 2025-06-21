@@ -1,8 +1,10 @@
 package rtmp
 
 import (
-	"log"
 	"net"
+	"strconv"
+
+	utils "kitch/pkg/utils"
 )
 
 type Server struct {
@@ -27,18 +29,18 @@ func NewServer(port int) *Server {
 }
 
 func (s *Server) Start() error {
-	listener, err := net.Listen("tcp", ":"+string(s.port))
+	listener, err := net.Listen("tcp", ":"+strconv.Itoa(s.port))
 	if err != nil {
 		return err
 	}
 	s.listener = listener
 
-	log.Printf("RTMP server listening on port %d", s.port)
+	utils.Logger.Infof("RTMP server listening on port %d", s.port)
 
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
-			log.Printf("Error accepting connection: %v", err)
+			utils.Logger.Errorf("Error accepting connection: %v", err)
 			continue
 		}
 
