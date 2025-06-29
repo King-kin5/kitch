@@ -5,7 +5,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/badoux/checkmail"
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -48,7 +48,6 @@ type Config struct {
 		SMTPPort int
 		Username string
 		Password string
-		From     string
 		Timeout  int // seconds
 	}
 	CORS struct {
@@ -60,55 +59,188 @@ type Config struct {
 
 func LoadConfig() (*Config, error) {
 	config := &Config{}
+	
+	// Try to load .env file with better error handling
+	if err := godotenv.Load(); err != nil {
+		if err := godotenv.Load(".env"); err != nil {
+			if err := godotenv.Load("../.env"); err != nil {
+				utils.Logger.Warn("No .env file found, using system environment variables only")
+			}
+		}
+	}
 
 	// Server config
-	config.Server.Port = getEnvAsInt("SERVER_PORT", 8080)
-	config.Server.Host = getEnv("SERVER_HOST", "0.0.0.0")
+	if v := os.Getenv("SERVER_PORT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			config.Server.Port = i
+		} else {
+			config.Server.Port = 8080
+		}
+	} else {
+		config.Server.Port = 8080
+	}
+	if v := os.Getenv("SERVER_HOST"); v != "" {
+		config.Server.Host = v
+	} else {
+		config.Server.Host = "0.0.0.0"
+	}
 
 	// Database config
-	config.Database.Host = getEnv("DB_HOST", "")
-	config.Database.Port = getEnvAsInt("DB_PORT", 5432)
-	config.Database.User = getEnv("DB_USER", "")
-	config.Database.Password = getEnv("DB_PASSWORD", "")
-	config.Database.DBName = getEnv("DB_NAME", "kitch")
-	config.Database.SSLMode = getEnv("DB_SSLMODE", "disable")
+	config.Database.Host = os.Getenv("DB_HOST")
+	if v := os.Getenv("DB_PORT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			config.Database.Port = i
+		} else {
+			config.Database.Port = 5432
+		}
+	} else {
+		config.Database.Port = 5432
+	}
+	config.Database.User = os.Getenv("DB_USER")
+	config.Database.Password = os.Getenv("DB_PASSWORD")
+	config.Database.DBName = os.Getenv("DB_NAME")
+	if config.Database.DBName == "" {
+		config.Database.DBName = "kitch"
+	}
+	config.Database.SSLMode = os.Getenv("DB_SSLMODE")
+	if config.Database.SSLMode == "" {
+		config.Database.SSLMode = "disable"
+	}
 
 	// Redis config
-	config.Redis.Host = getEnv("REDIS_HOST", "")
-	config.Redis.Port = getEnvAsInt("REDIS_PORT", 6379)
-	config.Redis.Password = getEnv("REDIS_PASSWORD", "")
-	config.Redis.DB = getEnvAsInt("REDIS_DB", 0)
+	config.Redis.Host = os.Getenv("REDIS_HOST")
+	if v := os.Getenv("REDIS_PORT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			config.Redis.Port = i
+		} else {
+			config.Redis.Port = 6379
+		}
+	} else {
+		config.Redis.Port = 6379
+	}
+	config.Redis.Password = os.Getenv("REDIS_PASSWORD")
+	if v := os.Getenv("REDIS_DB"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			config.Redis.DB = i
+		} else {
+			config.Redis.DB = 0
+		}
+	} else {
+		config.Redis.DB = 0
+	}
 
 	// RTMP config
-	config.RTMP.Port = getEnvAsInt("RTMP_PORT", 1935)
+	if v := os.Getenv("RTMP_PORT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			config.RTMP.Port = i
+		} else {
+			config.RTMP.Port = 1935
+		}
+	} else {
+		config.RTMP.Port = 1935
+	}
 
 	// Stream config
-	config.Stream.StoragePath = getEnv("STREAM_STORAGE_PATH", "./storage")
-	config.Stream.SegmentDuration = getEnvAsInt("STREAM_SEGMENT_DURATION", 6)
-	config.Stream.MaxSegments = getEnvAsInt("STREAM_MAX_SEGMENTS", 10)
+	config.Stream.StoragePath = os.Getenv("STREAM_STORAGE_PATH")
+	if config.Stream.StoragePath == "" {
+		config.Stream.StoragePath = "./storage"
+	}
+	if v := os.Getenv("STREAM_SEGMENT_DURATION"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			config.Stream.SegmentDuration = i
+		} else {
+			config.Stream.SegmentDuration = 6
+		}
+	} else {
+		config.Stream.SegmentDuration = 6
+	}
+	if v := os.Getenv("STREAM_MAX_SEGMENTS"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			config.Stream.MaxSegments = i
+		} else {
+			config.Stream.MaxSegments = 10
+		}
+	} else {
+		config.Stream.MaxSegments = 10
+	}
 
 	// JWT config
-	config.JWT.Secret = getEnv("JWT_SECRET", "")
-	config.JWT.Expiration = getEnv("JWT_EXPIRATION", "24h")
+	config.JWT.Secret = os.Getenv("JWT_SECRET")
+	config.JWT.Expiration = os.Getenv("JWT_EXPIRATION")
+	if config.JWT.Expiration == "" {
+		config.JWT.Expiration = "24h"
+	}
 
 	// FFmpeg config
-	config.FFmpeg.Path = getEnv("FFMPEG_PATH", "/usr/bin/ffmpeg")
-	config.FFmpeg.Threads = getEnvAsInt("FFMPEG_THREADS", 4)
+	config.FFmpeg.Path = os.Getenv("FFMPEG_PATH")
+	if config.FFmpeg.Path == "" {
+		config.FFmpeg.Path = "/usr/bin/ffmpeg"
+	}
+	if v := os.Getenv("FFMPEG_THREADS"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			config.FFmpeg.Threads = i
+		} else {
+			config.FFmpeg.Threads = 4
+		}
+	} else {
+		config.FFmpeg.Threads = 4
+	}
 
-	// Email config (values only from env, not shown/printed)
-	config.Email.SMTPHost = getEnv("EMAIL_SMTP_HOST", "")
-	config.Email.SMTPPort = getEnvAsInt("EMAIL_SMTP_PORT", 587)
-	config.Email.Username = getEnv("EMAIL_USERNAME", "")
-	config.Email.Password = getEnv("EMAIL_PASSWORD", "")
-	config.Email.From = getEnv("EMAIL_FROM", "")
-	config.Email.Timeout = getEnvAsInt("EMAIL_TIMEOUT", 10)
+	// Email config
+	config.Email.SMTPHost = os.Getenv("EMAIL_SMTP_HOST")
+	if v := os.Getenv("EMAIL_SMTP_PORT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			config.Email.SMTPPort = i
+		} else {
+			config.Email.SMTPPort = 587
+		}
+	} else {
+		config.Email.SMTPPort = 587
+	}
+	config.Email.Username = os.Getenv("EMAIL_USERNAME")
+	config.Email.Password = os.Getenv("EMAIL_PASSWORD")
+	if v := os.Getenv("EMAIL_TIMEOUT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			config.Email.Timeout = i
+		} else {
+			config.Email.Timeout = 10
+		}
+	} else {
+		config.Email.Timeout = 10
+	}
 
 	// CORS config
-	config.CORS.AllowedOrigins = getEnvAsSlice("CORS_ALLOWED_ORIGINS", []string{"http://localhost:3000", "https://yourdomain.com"})
-	config.CORS.AllowedMethods = getEnvAsSlice("CORS_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"})
-	config.CORS.AllowedHeaders = getEnvAsSlice("CORS_ALLOWED_HEADERS", []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With"})
+	if v := os.Getenv("CORS_ALLOWED_ORIGINS"); v != "" {
+		config.CORS.AllowedOrigins = utils.SplitString(v)
+	} else {
+		config.CORS.AllowedOrigins = []string{"http://localhost:8080", "https://yourdomain.com"}
+	}
+	if v := os.Getenv("CORS_ALLOWED_METHODS"); v != "" {
+		config.CORS.AllowedMethods = utils.SplitString(v)
+	} else {
+		config.CORS.AllowedMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
+	}
+	if v := os.Getenv("CORS_ALLOWED_HEADERS"); v != "" {
+		config.CORS.AllowedHeaders = utils.SplitString(v)
+	} else {
+		config.CORS.AllowedHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With"}
+	}
+
+	// Debug: Print loaded config values (remove in production)
+	utils.Logger.Infof("Loaded config - DB_HOST: %s, JWT_SECRET: %s", config.Database.Host, maskSecret(config.JWT.Secret))
 
 	return config, nil
+}
+
+// Helper function to mask secrets for logging
+func maskSecret(secret string) string {
+	if len(secret) == 0 {
+		return "<EMPTY>"
+	}
+	if len(secret) <= 8 {
+		return "<MASKED>"
+	}
+	return secret[:4] + "..." + secret[len(secret)-4:]
 }
 
 // GetDatabaseURL returns the formatted database connection string
@@ -127,29 +259,6 @@ func (c *Config) GetRedisURL() string {
 		return "redis://:" + c.Redis.Password + "@" + c.Redis.Host + ":" + strconv.Itoa(c.Redis.Port) + "/" + strconv.Itoa(c.Redis.DB)
 	}
 	return "redis://" + c.Redis.Host + ":" + strconv.Itoa(c.Redis.Port) + "/" + strconv.Itoa(c.Redis.DB)
-}
-
-func getEnv(key, defaultValue string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
-	}
-	return defaultValue
-}
-
-func getEnvAsInt(key string, defaultValue int) int {
-	if value, exists := os.LookupEnv(key); exists {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
-		}
-	}
-	return defaultValue
-}
-
-func getEnvAsSlice(key string, defaultValue []string) []string {
-	if value, exists := os.LookupEnv(key); exists {
-		return utils.SplitString(value)
-	}
-	return defaultValue
 }
 
 func (c *Config) Validate() error {
@@ -188,9 +297,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Email.Password == "" {
 		errors = append(errors, "EMAIL_PASSWORD is required")
-	}
-	if c.Email.From == "" {
-		errors = append(errors, "EMAIL_FROM is required")
 	}
 	if c.Email.SMTPPort <= 0 || c.Email.SMTPPort > 65535 {
 		errors = append(errors, "EMAIL_SMTP_PORT must be between 1 and 65535")
@@ -249,19 +355,6 @@ func (c *Config) Validate() error {
 		if c.JWT.Expiration == "" {
 			errors = append(errors, "JWT_EXPIRATION is required")
 		}
-
-		// Validate email format
-		if !isValidEmail(c.Email.From) {
-			errors = append(errors, "EMAIL_FROM must be a valid email address")
-		}
-
-		// Check for weak passwords in config (basic check)
-		if len(c.Database.Password) < 8 {
-			utils.Logger.Warn("Database password is shorter than 8 characters - consider using a stronger password")
-		}
-		if len(c.Email.Password) < 8 {
-			utils.Logger.Warn("Email password is shorter than 8 characters - consider using a stronger password")
-		}
 	}
 
 	// Log all errors
@@ -274,17 +367,6 @@ func (c *Config) Validate() error {
 
 	utils.Logger.Info("Configuration validation passed")
 	return nil
-}
-
-// isValidEmail performs proper email validation using checkmail library
-func isValidEmail(email string) bool {
-	if len(email) == 0 || len(email) > 254 {
-		return false
-	}
-
-	// Use proper email validation library
-	err := checkmail.ValidateFormat(email)
-	return err == nil
 }
 
 // ValidateProductionConfig performs additional production-specific validations

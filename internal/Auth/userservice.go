@@ -21,14 +21,6 @@ type Handler struct {
 	userstore    UserStore
 	tokenManager *security.TokenManager
 	emailService *EmailService
-	codeStore    CodeStore
-}
-
-// CodeStore interface for storing verification codes
-type CodeStore interface {
-	StoreCode(email, code string, expiry time.Duration) error
-	GetCode(email string) (string, error)
-	DeleteCode(email string) error
 }
 
 // ErrorResponse represents a standardized error response
@@ -45,12 +37,11 @@ type SuccessResponse struct {
 }
 
 // NewHandler creates a new authentication handler with all dependencies
-func NewHandler(userstore UserStore, config *security.Config, emailService *EmailService, codeStore CodeStore, db *sql.DB) *Handler {
+func NewHandler(userstore UserStore, config *security.Config, emailService *EmailService, db *sql.DB) *Handler {
 	return &Handler{
 		userstore:    userstore,
 		tokenManager: security.NewTokenManager(config, db),
 		emailService: emailService,
-		codeStore:    codeStore,
 	}
 }
 
@@ -344,7 +335,8 @@ func (h *Handler) LoginUser(c echo.Context) error {
 	return c.JSON(http.StatusOK, SuccessResponse{
 		Message: "Login successful",
 		Data: map[string]interface{}{
-			"user": user.PrivateUser(),
+			"user":         user.PrivateUser(),
+			"access_token": tokens.AccessToken,
 		},
 	})
 }
@@ -577,61 +569,6 @@ func (h *Handler) GetProfileByUsername(c echo.Context) error {
 	})
 }
 
-// Send2FACode sends a 2-factor authentication code via email
-func (h *Handler) Send2FACode(c echo.Context) error {
-	var input struct {
-		Email string `json:"email"`
-	}
-
-	if err := c.Bind(&input); err != nil {
-		return c.JSON(http.StatusBadRequest, ErrorResponse{
-			Error:   "Invalid request format",
-			Code:    "INVALID_REQUEST",
-			Details: "Request body could not be parsed",
-		})
-	}
-
-	// Sanitize email
-	input.Email = strings.TrimSpace(strings.ToLower(input.Email))
-
-	if input.Email == "" {
-		return c.JSON(http.StatusBadRequest, ErrorResponse{
-			Error:   "Email is required",
-			Code:    "MISSING_EMAIL",
-			Details: "Email address must be provided",
-		})
-	}
-
-	if !isValidEmail(input.Email) {
-		return c.JSON(http.StatusBadRequest, ErrorResponse{
-			Error:   "Invalid email format",
-			Code:    "INVALID_EMAIL",
-			Details: "Please provide a valid email address",
-		})
-	}
-
-	// Always generate a code
-	code, _ := security.GenerateRandomcode(6)
-	// Always store the code (even for non-existent users, but you may want to use a dummy store for non-existent users)
-	_ = h.codeStore.StoreCode(input.Email, code, 10*time.Minute)
-
-	// Check if user exists
-	user, _ := h.userstore.GetUserByEmail(input.Email)
-	if user != nil {
-		// Send 2FA email asynchronously
-		go h.send2FAEmailAsync(input.Email, code)
-	} else {
-		// Simulate email sending delay for non-existent users
-		time.Sleep(500 * time.Millisecond)
-	}
-
-	utils.Logger.Infof("2FA code process completed for %s", maskEmail(input.Email))
-
-	return c.JSON(http.StatusOK, SuccessResponse{
-		Message: "If the email exists, a verification code has been sent",
-	})
-}
-
 // Validation helper methods
 func (h *Handler) validateRegistrationInput(input CreateUser) error {
 	if input.Username == "" {
@@ -733,43 +670,6 @@ func (h *Handler) validateAvatarURL(url string) error {
 
 	return nil
 }
-
-// Async helper methods
-func (h *Handler) sendWelcomeEmailAsync(email, username string) {
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				utils.Logger.Errorf("Recovered in sendWelcomeEmailAsync: %v", r)
-			}
-		}()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := h.emailService.SendWelcomeEmail(ctx, email, username); err != nil {
-			utils.Logger.Errorf("Failed to send welcome email to %s: %v", maskEmail(email), err)
-		} else {
-			utils.Logger.Infof("Welcome email sent to %s", maskEmail(email))
-		}
-	}()
-}
-
-func (h *Handler) send2FAEmailAsync(email, code string) {
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				utils.Logger.Errorf("Recovered in send2FAEmailAsync: %v", r)
-			}
-		}()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := h.emailService.Send2StepVerificationEmail(ctx, email, code); err != nil {
-			utils.Logger.Errorf("Failed to send 2FA email to %s: %v", maskEmail(email), err)
-		} else {
-			utils.Logger.Infof("2FA email sent to %s", maskEmail(email))
-		}
-	}()
-}
-
-//
 
 func maskEmail(email string) string {
 	if len(email) == 0 {

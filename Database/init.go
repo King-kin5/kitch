@@ -38,12 +38,6 @@ func GetPostgresDB(config *configs.Config) (*sql.DB, error) {
 			return
 		}
 
-		// Create stream-related tables
-		if err := schema.CreateStreamTables(db); err != nil {
-			dbInstanceError = fmt.Errorf("failed to create stream tables: %v", err)
-			dbInstance = nil
-			return
-		}
 	})
 	return dbInstance, dbInstanceError
 }

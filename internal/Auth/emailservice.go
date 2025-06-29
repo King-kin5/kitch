@@ -22,7 +22,6 @@ type EmailService struct {
 	SMTPPort   int
 	Username   string
 	Password   string
-	From       string
 	Timeout    time.Duration
 	MaxRetries int
 	RetryDelay time.Duration
@@ -58,7 +57,6 @@ func NewEmailService(cfg *configs.Config) (*EmailService, error) {
 		SMTPPort:   cfg.Email.SMTPPort,
 		Username:   cfg.Email.Username,
 		Password:   cfg.Email.Password,
-		From:       cfg.Email.From,
 		Timeout:    time.Duration(cfg.Email.Timeout) * time.Second,
 		MaxRetries: 3,
 		RetryDelay: 2 * time.Second,
@@ -307,7 +305,7 @@ func (es *EmailService) validateEmailInputs(to, subject, body string) error {
 // buildMessage constructs the email message with proper headers
 func (es *EmailService) buildMessage(to, subject, body string, isHTML bool) (string, error) {
 	headers := make(map[string]string)
-	headers["From"] = es.From
+	headers["From"] = es.Username
 	headers["To"] = to
 	headers["Subject"] = subject
 	headers["Date"] = time.Now().Format(time.RFC1123Z)
@@ -335,56 +333,86 @@ func (es *EmailService) buildMessage(to, subject, body string, isHTML bool) (str
 
 // sendSMTP handles the actual SMTP communication
 func (es *EmailService) sendSMTP(to, message string) error {
-	// TLS configuration
-	tlsConfig := &tls.Config{
-		ServerName:         es.SMTPHost,
-		InsecureSkipVerify: false,
-		MinVersion:         tls.VersionTLS12,
-	}
-
-	// Connect directly using TLS (SMTP SSL on port 465)
 	addr := fmt.Sprintf("%s:%d", es.SMTPHost, es.SMTPPort)
-	tlsConn, err := tls.Dial("tcp", addr, tlsConfig)
-	if err != nil {
-		return fmt.Errorf("failed to establish TLS connection to %s: %v", addr, err)
-	}
-	defer tlsConn.Close()
 
-	// Create SMTP client
-	client, err := smtp.NewClient(tlsConn, es.SMTPHost)
-	if err != nil {
-		return fmt.Errorf("failed to create SMTP client: %v", err)
-	}
-	defer client.Quit()
+	if es.SMTPPort == 465 {
+		// Implicit TLS
+		tlsConfig := &tls.Config{
+			ServerName:         es.SMTPHost,
+			InsecureSkipVerify: false,
+			MinVersion:         tls.VersionTLS12,
+		}
+		tlsConn, err := tls.Dial("tcp", addr, tlsConfig)
+		if err != nil {
+			return fmt.Errorf("failed to establish TLS connection to %s: %v", addr, err)
+		}
+		defer tlsConn.Close()
 
-	// Authenticate
-	auth := smtp.PlainAuth("", es.Username, es.Password, es.SMTPHost)
-	if err = client.Auth(auth); err != nil {
-		return fmt.Errorf("SMTP authentication failed: %v", err)
-	}
+		client, err := smtp.NewClient(tlsConn, es.SMTPHost)
+		if err != nil {
+			return fmt.Errorf("failed to create SMTP client: %v", err)
+		}
+		defer client.Quit()
 
-	// Set sender
-	if err = client.Mail(es.From); err != nil {
-		return fmt.Errorf("failed to set sender: %v", err)
-	}
+		auth := smtp.PlainAuth("", es.Username, es.Password, es.SMTPHost)
+		if err = client.Auth(auth); err != nil {
+			return fmt.Errorf("SMTP authentication failed: %v", err)
+		}
+		if err = client.Mail(es.Username); err != nil {
+			return fmt.Errorf("failed to set sender: %v", err)
+		}
+		if err = client.Rcpt(to); err != nil {
+			return fmt.Errorf("failed to set recipient: %v", err)
+		}
+		writer, err := client.Data()
+		if err != nil {
+			return fmt.Errorf("failed to get data writer: %v", err)
+		}
+		defer writer.Close()
+		if _, err = writer.Write([]byte(message)); err != nil {
+			return fmt.Errorf("failed to write message: %v", err)
+		}
+		utils.Logger.Infof("SMTP: Email sent successfully to %s via %s", to, addr)
+		return nil
+	} else {
+		// STARTTLS (e.g., port 587)
+		client, err := smtp.Dial(addr)
+		if err != nil {
+			return fmt.Errorf("failed to dial SMTP server: %v", err)
+		}
+		defer client.Quit()
 
-	// Set recipient
-	if err = client.Rcpt(to); err != nil {
-		return fmt.Errorf("failed to set recipient: %v", err)
-	}
+		// Upgrade to TLS
+		tlsConfig := &tls.Config{
+			ServerName:         es.SMTPHost,
+			InsecureSkipVerify: false,
+			MinVersion:         tls.VersionTLS12,
+		}
+		if err = client.StartTLS(tlsConfig); err != nil {
+			return fmt.Errorf("failed to start TLS: %v", err)
+		}
 
-	// Send message
-	writer, err := client.Data()
-	if err != nil {
-		return fmt.Errorf("failed to get data writer: %v", err)
+		auth := smtp.PlainAuth("", es.Username, es.Password, es.SMTPHost)
+		if err = client.Auth(auth); err != nil {
+			return fmt.Errorf("SMTP authentication failed: %v", err)
+		}
+		if err = client.Mail(es.Username); err != nil {
+			return fmt.Errorf("failed to set sender: %v", err)
+		}
+		if err = client.Rcpt(to); err != nil {
+			return fmt.Errorf("failed to set recipient: %v", err)
+		}
+		writer, err := client.Data()
+		if err != nil {
+			return fmt.Errorf("failed to get data writer: %v", err)
+		}
+		defer writer.Close()
+		if _, err = writer.Write([]byte(message)); err != nil {
+			return fmt.Errorf("failed to write message: %v", err)
+		}
+		utils.Logger.Infof("SMTP: Email sent successfully to %s via %s", to, addr)
+		return nil
 	}
-	defer writer.Close()
-
-	if _, err = writer.Write([]byte(message)); err != nil {
-		return fmt.Errorf("failed to write message: %v", err)
-	}
-
-	return nil
 }
 
 // isValidEmail validates email format using proper email validation library

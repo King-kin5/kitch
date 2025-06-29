@@ -32,7 +32,7 @@ func NewConfig(appConfig *configs.Config) *Config {
 	// Use CORS configuration from app config, with fallback defaults
 	allowedOrigins := appConfig.CORS.AllowedOrigins
 	if len(allowedOrigins) == 0 {
-		allowedOrigins = []string{"http://localhost:3000", "https://yourdomain.com"}
+		allowedOrigins = []string{"http://localhost:8080", "https://yourdomain.com"}
 	}
 
 	return &Config{

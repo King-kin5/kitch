@@ -13,8 +13,8 @@ const (
 	RefreshTokenCookie = "refresh_token"
 
 	// Cookie settings
-	CookieMaxAge   = 7 * 24 * 60 * 60 // 7 days in seconds
-	SecureCookie   = true             // Set to false for development without HTTPS
+	CookieMaxAge   = 7 * 24 * 60 * 60 
+	SecureCookie   = true             
 	HttpOnlyCookie = true
 	SameSiteCookie = http.SameSiteStrictMode
 )

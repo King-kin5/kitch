@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	utils "kitch/pkg/utils"
+	"strings"
 )
 
 // CreateUsersTable creates the users table with production-ready schema
@@ -63,8 +64,12 @@ func CreateUsersTable(db *sql.DB) error {
 
 	_, err := db.Exec(query)
 	if err != nil {
-		utils.Logger.Errorf("Failed to create users table: %v", err)
-		return fmt.Errorf("failed to create users table: %w", err)
+		dbErrStr := err.Error()
+		// Ignore errors about existing constraints, indexes, or tables
+		if !(strings.Contains(dbErrStr, "already exists") || strings.Contains(dbErrStr, "duplicate key value") || strings.Contains(dbErrStr, "already defined")) {
+			utils.Logger.Errorf("Failed to create users table: %v", err)
+			return fmt.Errorf("failed to create users table: %w", err)
+		}
 	}
 
 	utils.Logger.Info("Users table created successfully")
@@ -111,8 +116,12 @@ func CreateUserSessionsTable(db *sql.DB) error {
 
 	_, err := db.Exec(query)
 	if err != nil {
-		utils.Logger.Errorf("Failed to create user_sessions table: %v", err)
-		return fmt.Errorf("failed to create user_sessions table: %w", err)
+		dbErrStr := err.Error()
+		// Ignore errors about existing constraints, indexes, or tables
+		if !(strings.Contains(dbErrStr, "already exists") || strings.Contains(dbErrStr, "duplicate key value") || strings.Contains(dbErrStr, "already defined")) {
+			utils.Logger.Errorf("Failed to create user_sessions table: %v", err)
+			return fmt.Errorf("failed to create user_sessions table: %w", err)
+		}
 	}
 
 	utils.Logger.Info("User sessions table created successfully")
@@ -150,8 +159,12 @@ func CreateAuditLogsTable(db *sql.DB) error {
 
 	_, err := db.Exec(query)
 	if err != nil {
-		utils.Logger.Errorf("Failed to create audit_logs table: %v", err)
-		return fmt.Errorf("failed to create audit_logs table: %w", err)
+		dbErrStr := err.Error()
+		// Ignore errors about existing constraints, indexes, or tables
+		if !(strings.Contains(dbErrStr, "already exists") || strings.Contains(dbErrStr, "duplicate key value") || strings.Contains(dbErrStr, "already defined")) {
+			utils.Logger.Errorf("Failed to create audit_logs table: %v", err)
+			return fmt.Errorf("failed to create audit_logs table: %w", err)
+		}
 	}
 
 	utils.Logger.Info("Audit logs table created successfully")
@@ -184,8 +197,12 @@ func CreatePasswordResetTokensTable(db *sql.DB) error {
 
 	_, err := db.Exec(query)
 	if err != nil {
-		utils.Logger.Errorf("Failed to create password_reset_tokens table: %v", err)
-		return fmt.Errorf("failed to create password_reset_tokens table: %w", err)
+		dbErrStr := err.Error()
+		// Ignore errors about existing constraints, indexes, or tables
+		if !(strings.Contains(dbErrStr, "already exists") || strings.Contains(dbErrStr, "duplicate key value") || strings.Contains(dbErrStr, "already defined")) {
+			utils.Logger.Errorf("Failed to create password_reset_tokens table: %v", err)
+			return fmt.Errorf("failed to create password_reset_tokens table: %w", err)
+		}
 	}
 
 	utils.Logger.Info("Password reset tokens table created successfully")
@@ -217,8 +234,12 @@ func CreateEmailVerificationTokensTable(db *sql.DB) error {
 
 	_, err := db.Exec(query)
 	if err != nil {
-		utils.Logger.Errorf("Failed to create email_verification_tokens table: %v", err)
-		return fmt.Errorf("failed to create email_verification_tokens table: %w", err)
+		dbErrStr := err.Error()
+		// Ignore errors about existing constraints, indexes, or tables
+		if !(strings.Contains(dbErrStr, "already exists") || strings.Contains(dbErrStr, "duplicate key value") || strings.Contains(dbErrStr, "already defined")) {
+			utils.Logger.Errorf("Failed to create email_verification_tokens table: %v", err)
+			return fmt.Errorf("failed to create email_verification_tokens table: %w", err)
+		}
 	}
 
 	utils.Logger.Info("Email verification tokens table created successfully")
@@ -248,9 +269,6 @@ func CreateTokenBlacklistTable(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_token_blacklist_blacklisted_at ON token_blacklist(blacklisted_at);
 		CREATE INDEX IF NOT EXISTS idx_token_blacklist_token_type ON token_blacklist(token_type);
 
-		-- Create partial index for non-expired blacklisted tokens
-		CREATE INDEX IF NOT EXISTS idx_token_blacklist_active ON token_blacklist(token_hash) WHERE expires_at > NOW();
-
 		-- Add constraints
 		ALTER TABLE token_blacklist ADD CONSTRAINT chk_token_blacklist_token_hash_length CHECK (length(token_hash) >= 32);
 		ALTER TABLE token_blacklist ADD CONSTRAINT chk_token_blacklist_expires_at_future CHECK (expires_at > blacklisted_at);
@@ -272,8 +290,12 @@ func CreateTokenBlacklistTable(db *sql.DB) error {
 
 	_, err := db.Exec(query)
 	if err != nil {
-		utils.Logger.Errorf("Failed to create token_blacklist table: %v", err)
-		return fmt.Errorf("failed to create token_blacklist table: %w", err)
+		dbErrStr := err.Error()
+		// Ignore errors about existing constraints, indexes, or tables
+		if !(strings.Contains(dbErrStr, "already exists") || strings.Contains(dbErrStr, "duplicate key value") || strings.Contains(dbErrStr, "already defined")) {
+			utils.Logger.Errorf("Failed to create token_blacklist table: %v", err)
+			return fmt.Errorf("failed to create token_blacklist table: %w", err)
+		}
 	}
 
 	utils.Logger.Info("Token blacklist table created successfully")
