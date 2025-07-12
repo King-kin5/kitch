@@ -122,7 +122,7 @@ kitch/
 
 ## Project Roadmap
 
-### Phase 1: Core Infrastructure (Weeks 1-3)
+### Phase 1: Core Infrastructure (Weeks 1-6)
 
 #### Step 1: Project Setup & Basic Infrastructure
 - [x] Initialize Go modules and project structure
@@ -155,7 +155,7 @@ kitch/
 - [] Stream key validation and security
 - [] Stream statistics and analytics
 
-### Phase 2: Video Processing Pipeline (Weeks 4-6)
+### Phase 2: Video Processing Pipeline (Weeks 6-10)
 
 #### Step 4: FFmpeg Integration
 - [] Go wrapper for FFmpeg command execution
@@ -178,7 +178,7 @@ kitch/
 - [] Playlist generation and management
 - [] Segment cleanup routines
 
-### Phase 3: Frontend & Playback (Weeks 7-9)
+### Phase 3: Frontend & Playback (Weeks 10-13)
 
 #### Step 7: Basic Web Interface
 - [ ] Simple React app with routing
@@ -201,7 +201,7 @@ kitch/
 - [ ] Stream start/stop controls
 - [ ] Stream settings management
 
-### Phase 4: Real-time Features (Weeks 10-12)
+### Phase 4: Real-time Features (Weeks 13-17)
 
 #### Step 10: Chat System
 - [] WebSocket server for real-time chat
