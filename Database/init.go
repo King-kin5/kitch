@@ -22,22 +22,30 @@ func GetPostgresDB(config *configs.Config) (*sql.DB, error) {
 			dbInstanceError = fmt.Errorf("failed to connect to PostgreSQL: %v", err)
 			return
 		}
-
 		err = db.Ping()
 		if err != nil {
 			dbInstanceError = fmt.Errorf("failed to ping PostgreSQL: %v", err)
 			return
 		}
-
 		dbInstance = db
-
 		// Create all user-related tables
 		if err := schema.CreateAllTables(db); err != nil {
 			dbInstanceError = fmt.Errorf("failed to create user tables: %v", err)
 			dbInstance = nil
 			return
 		}
-
+		// Create all streaming-related tables
+		if err := schema.CreateAllStreamingTables(db); err != nil {
+			dbInstanceError = fmt.Errorf("failed to create streaming tables: %v", err)
+			dbInstance = nil
+			return
+		}
+		// Create streaming functions
+		if err := schema.CreateStreamingFunctions(db); err != nil {
+			dbInstanceError = fmt.Errorf("failed to create streaming functions: %v", err)
+			dbInstance = nil
+			return
+		}
 	})
 	return dbInstance, dbInstanceError
 }

@@ -111,7 +111,6 @@ kitch/
 ### Prerequisites
 - Go 1.21+
 - Docker and Docker Compose
-- Node.js 18+ (for frontend)
 - FFmpeg
 
 ### Environment Setup
@@ -136,8 +135,8 @@ kitch/
 - [x] User registration/login endpoints
 - [x] JWT token generation and validation
 - [x] Password hashing and security
-- [] Basic user profile management
-- [] Stream key generation for users
+- [x] Basic user profile management
+- [x] Stream key generation for users
 
 #### Step 3: Basic RTMP Ingestion Server
 - [] RTMP server that accepts incoming streams
@@ -145,6 +144,16 @@ kitch/
 - [] Basic connection handling and logging
 - [] Stream status tracking (live/offline)
 - [] Simple stream metadata storage
+
+#### Step 4: Stream Management System
+- [x] Database schema for streams and stream keys
+- [x] Stream key generation and management
+- [] Stream creation and management
+- [] Live stream tracking
+- [] Viewer count management
+- [] Stream API endpoints (RESTful)
+- [] Stream key validation and security
+- [] Stream statistics and analytics
 
 ### Phase 2: Video Processing Pipeline (Weeks 4-6)
 

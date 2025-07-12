@@ -1,5 +1,4 @@
 package Auth
-
 import (
 	"context"
 	"database/sql"
@@ -8,49 +7,46 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
 	security "kitch/internal/security"
+	"kitch/internal/stream"
 	utils "kitch/pkg/utils"
-
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 )
 
-// Handler represents the authentication handler with comprehensive error handling
 type Handler struct {
-	userstore    UserStore
-	tokenManager *security.TokenManager
-	emailService *EmailService
+	userstore     UserStore
+	tokenManager  *security.TokenManager
+	emailService  *EmailService
+	streamService *stream.StreamService
 }
 
-// ErrorResponse represents a standardized error response
 type ErrorResponse struct {
 	Error   string `json:"error"`
 	Code    string `json:"code"`
 	Details string `json:"details,omitempty"`
 }
 
-// SuccessResponse represents a standardized success response
 type SuccessResponse struct {
 	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
 }
-
 // NewHandler creates a new authentication handler with all dependencies
 func NewHandler(userstore UserStore, config *security.Config, emailService *EmailService, db *sql.DB) *Handler {
+	// Initialize stream store and service
+	streamStore := stream.NewStreamStore(db)
+	streamService := stream.NewStreamService(streamStore)
 	return &Handler{
-		userstore:    userstore,
-		tokenManager: security.NewTokenManager(config, db),
-		emailService: emailService,
+		userstore:     userstore,
+		tokenManager:  security.NewTokenManager(config, db),
+		emailService:  emailService,
+		streamService: streamService,
 	}
 }
-
 // RegisterUser handles user registration with comprehensive validation and security
 func (h *Handler) RegisterUser(c echo.Context) error {
 	var input CreateUser
 	utils.Logger.Info("Received registration request")
-
-	// Bind and validate input
 	if err := c.Bind(&input); err != nil {
 		utils.Logger.Errorf("Error binding request data: %v", err)
 		return c.JSON(http.StatusBadRequest, ErrorResponse{
@@ -59,18 +55,13 @@ func (h *Handler) RegisterUser(c echo.Context) error {
 			Details: "Request body could not be parsed",
 		})
 	}
-
-	// Sanitize input
 	input.Username = strings.TrimSpace(input.Username)
 	input.Email = strings.TrimSpace(strings.ToLower(input.Email))
 	if input.Bio != nil {
 		bio := strings.TrimSpace(*input.Bio)
 		input.Bio = &bio
 	}
-
 	utils.Logger.Infof("Registration attempt for email: %s", maskEmail(input.Email))
-
-	// Comprehensive validation
 	if err := h.validateRegistrationInput(input); err != nil {
 		utils.Logger.Warnf("Validation failed: %v", err)
 		return c.JSON(http.StatusBadRequest, ErrorResponse{
@@ -79,7 +70,6 @@ func (h *Handler) RegisterUser(c echo.Context) error {
 			Details: "Registration data validation failed",
 		})
 	}
-
 	// Check database connection
 	if err := h.userstore.CheckDBConnection(); err != nil {
 		utils.Logger.Errorf("Database connection error: %v", err)
@@ -89,8 +79,6 @@ func (h *Handler) RegisterUser(c echo.Context) error {
 			Details: "Unable to connect to database",
 		})
 	}
-
-	// Check if email already exists
 	existingUser, err := h.userstore.GetUserByEmail(input.Email)
 	if err != nil {
 		utils.Logger.Errorf("Error checking existing email: %v", err)
@@ -108,8 +96,6 @@ func (h *Handler) RegisterUser(c echo.Context) error {
 			Details: "An account with this email already exists",
 		})
 	}
-
-	// Check if username already exists
 	existingUsername, err := h.userstore.GetUserByName(input.Username)
 	if err != nil {
 		utils.Logger.Errorf("Error checking existing username: %v", err)
@@ -127,8 +113,6 @@ func (h *Handler) RegisterUser(c echo.Context) error {
 			Details: "Please choose a different username",
 		})
 	}
-
-	// Hash password with proper validation
 	hashedPassword, err := security.PasswordHash(input.Password)
 	if err != nil {
 		utils.Logger.Errorf("Error hashing password: %v", err)
@@ -158,7 +142,6 @@ func (h *Handler) RegisterUser(c echo.Context) error {
 		})
 	}
 	defer tx.Rollback()
-
 	user := &User{
 		ID:         uuid.New(),
 		Username:   input.Username,
@@ -171,8 +154,6 @@ func (h *Handler) RegisterUser(c echo.Context) error {
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
-
-	// Insert user in DB using tx
 	query := `INSERT INTO users (id, username, email, password_hash, bio, is_active, is_verified, login_count, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 	_, err = tx.Exec(query, user.ID, user.Username, user.Email, user.Password, user.Bio, user.IsActive, user.IsVerified, user.LoginCount, user.CreatedAt, user.UpdatedAt)
 	if err != nil {
@@ -183,7 +164,6 @@ func (h *Handler) RegisterUser(c echo.Context) error {
 			Details: "Failed to create user account",
 		})
 	}
-
 	// Send welcome email synchronously
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -195,7 +175,6 @@ func (h *Handler) RegisterUser(c echo.Context) error {
 			Details: "Failed to send welcome email",
 		})
 	}
-
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		utils.Logger.Errorf("Failed to commit transaction: %v", err)
@@ -205,7 +184,6 @@ func (h *Handler) RegisterUser(c echo.Context) error {
 			Details: "Failed to commit transaction",
 		})
 	}
-
 	// Generate token pair for automatic login
 	tokens, err := h.tokenManager.GenerateTokenPair(user.ID, uuid.New())
 	if err != nil {
@@ -220,13 +198,9 @@ func (h *Handler) RegisterUser(c echo.Context) error {
 			},
 		})
 	}
-
-	// Set HTTP-only cookies for automatic login
 	cookieConfig := security.GetCookieConfigForContext(c)
 	security.SetAuthCookies(c, tokens.AccessToken, tokens.RefreshToken, cookieConfig)
-
 	utils.Logger.Infof("User registration successful for email: %s", maskEmail(input.Email))
-
 	return c.JSON(http.StatusCreated, SuccessResponse{
 		Message: "User registered successfully",
 		Data: map[string]interface{}{
@@ -234,11 +208,9 @@ func (h *Handler) RegisterUser(c echo.Context) error {
 		},
 	})
 }
-
 // LoginUser handles user authentication with enhanced security
 func (h *Handler) LoginUser(c echo.Context) error {
 	var input LoginRequest
-
 	// Bind the request data
 	if err := c.Bind(&input); err != nil {
 		utils.Logger.Errorf("Error binding login request data: %v", err)
@@ -248,13 +220,9 @@ func (h *Handler) LoginUser(c echo.Context) error {
 			Details: "Request body could not be parsed",
 		})
 	}
-
 	// Sanitize input
 	input.Email = strings.TrimSpace(strings.ToLower(input.Email))
-
 	utils.Logger.Infof("Login attempt for email: %s", maskEmail(input.Email))
-
-	// Validate input
 	if input.Email == "" || input.Password == "" {
 		utils.Logger.Warn("Login attempt with missing credentials")
 		return c.JSON(http.StatusBadRequest, ErrorResponse{
@@ -263,8 +231,6 @@ func (h *Handler) LoginUser(c echo.Context) error {
 			Details: "Both email and password must be provided",
 		})
 	}
-
-	// Validate email format
 	if !isValidEmail(input.Email) {
 		return c.JSON(http.StatusBadRequest, ErrorResponse{
 			Error:   "Invalid email format",
@@ -272,7 +238,6 @@ func (h *Handler) LoginUser(c echo.Context) error {
 			Details: "Please provide a valid email address",
 		})
 	}
-
 	// Get user by email
 	user, err := h.userstore.GetUserByEmail(input.Email)
 	if err != nil {
@@ -283,7 +248,6 @@ func (h *Handler) LoginUser(c echo.Context) error {
 			Details: "Unable to verify user credentials",
 		})
 	}
-
 	// Check if user exists and password is correct
 	if user == nil || !security.CheckPasswordSame(user.Password, input.Password) {
 		utils.Logger.Warnf("Invalid login attempt for email: %s", maskEmail(input.Email))
@@ -293,7 +257,6 @@ func (h *Handler) LoginUser(c echo.Context) error {
 			Details: "The email or password you entered is incorrect",
 		})
 	}
-
 	// Check if user account is active
 	if !user.IsActive {
 		utils.Logger.Warnf("Login attempt for inactive account: %s", maskEmail(input.Email))
@@ -303,8 +266,6 @@ func (h *Handler) LoginUser(c echo.Context) error {
 			Details: "Your account has been deactivated. Please contact support",
 		})
 	}
-
-	// Generate token pair
 	tokens, err := h.tokenManager.GenerateTokenPair(user.ID, uuid.New())
 	if err != nil {
 		utils.Logger.Errorf("Failed to generate tokens: %v", err)
@@ -314,24 +275,17 @@ func (h *Handler) LoginUser(c echo.Context) error {
 			Details: "Failed to generate authentication tokens",
 		})
 	}
-
 	// Update last login time and login count
 	now := time.Now()
 	user.LastLogin = &now
 	user.LoginCount++
 	user.UpdatedAt = now
-
 	if err := h.userstore.UpdateUserInfoByID(user.ID.String(), *user); err != nil {
 		utils.Logger.Warnf("Failed to update login info for user %s: %v", user.ID, err)
-		// Don't fail the login for this
 	}
-
-	// Set HTTP-only cookies
 	cookieConfig := security.GetCookieConfigForContext(c)
 	security.SetAuthCookies(c, tokens.AccessToken, tokens.RefreshToken, cookieConfig)
-
 	utils.Logger.Infof("User login successful for email: %s", maskEmail(input.Email))
-
 	return c.JSON(http.StatusOK, SuccessResponse{
 		Message: "Login successful",
 		Data: map[string]interface{}{
@@ -340,7 +294,6 @@ func (h *Handler) LoginUser(c echo.Context) error {
 		},
 	})
 }
-
 // UpdateUser updates user information by ID with comprehensive validation
 func (h *Handler) UpdateUser(c echo.Context) error {
 	var input UpdateUserRequest
@@ -352,7 +305,6 @@ func (h *Handler) UpdateUser(c echo.Context) error {
 			Details: "Request body could not be parsed",
 		})
 	}
-
 	userID := c.Param("id")
 	if userID == "" {
 		return c.JSON(http.StatusBadRequest, ErrorResponse{
@@ -361,8 +313,6 @@ func (h *Handler) UpdateUser(c echo.Context) error {
 			Details: "User ID must be provided in the URL path",
 		})
 	}
-
-	// Validate UUID format
 	userUUID, err := uuid.Parse(userID)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, ErrorResponse{
@@ -371,7 +321,6 @@ func (h *Handler) UpdateUser(c echo.Context) error {
 			Details: "User ID must be a valid UUID",
 		})
 	}
-
 	// Fetch the user
 	user, err := h.userstore.GetUserByID(userID)
 	if err != nil {
@@ -389,10 +338,8 @@ func (h *Handler) UpdateUser(c echo.Context) error {
 			Details: "No user found with the provided ID",
 		})
 	}
-
 	// Validate and update fields
 	updated := false
-
 	if input.Username != nil {
 		newUsername := strings.TrimSpace(*input.Username)
 		if newUsername != user.Username {
@@ -403,7 +350,6 @@ func (h *Handler) UpdateUser(c echo.Context) error {
 					Details: "Username validation failed",
 				})
 			}
-
 			// Check if new username is available
 			existingUser, err := h.userstore.GetUserByName(newUsername)
 			if err != nil {
@@ -425,7 +371,6 @@ func (h *Handler) UpdateUser(c echo.Context) error {
 			updated = true
 		}
 	}
-
 	if input.Bio != nil {
 		newBio := strings.TrimSpace(*input.Bio)
 		if (user.Bio == nil && newBio != "") || (user.Bio != nil && *user.Bio != newBio) {
@@ -440,7 +385,6 @@ func (h *Handler) UpdateUser(c echo.Context) error {
 			updated = true
 		}
 	}
-
 	if input.AvatarURL != nil {
 		newAvatarURL := strings.TrimSpace(*input.AvatarURL)
 		if (user.AvatarURL == nil && newAvatarURL != "") || (user.AvatarURL != nil && *user.AvatarURL != newAvatarURL) {
@@ -455,7 +399,6 @@ func (h *Handler) UpdateUser(c echo.Context) error {
 			updated = true
 		}
 	}
-
 	if !updated {
 		return c.JSON(http.StatusOK, SuccessResponse{
 			Message: "No changes made",
@@ -464,10 +407,8 @@ func (h *Handler) UpdateUser(c echo.Context) error {
 			},
 		})
 	}
-
 	// Update timestamp
 	user.UpdatedAt = time.Now()
-
 	// Save the updated user
 	if err := h.userstore.UpdateUserInfoByID(userID, *user); err != nil {
 		utils.Logger.Errorf("Error updating user: %v", err)
@@ -477,9 +418,7 @@ func (h *Handler) UpdateUser(c echo.Context) error {
 			Details: "Unable to save user changes",
 		})
 	}
-
 	utils.Logger.Infof("User %s updated successfully", userID)
-
 	return c.JSON(http.StatusOK, SuccessResponse{
 		Message: "User updated successfully",
 		Data: map[string]interface{}{
@@ -487,7 +426,6 @@ func (h *Handler) UpdateUser(c echo.Context) error {
 		},
 	})
 }
-
 // Profile retrieves user profile information
 func (h *Handler) Profile(c echo.Context) error {
 	userID := c.Param("id")
@@ -498,7 +436,6 @@ func (h *Handler) Profile(c echo.Context) error {
 			Details: "User ID must be provided in the URL path",
 		})
 	}
-
 	// Validate UUID format
 	if _, err := uuid.Parse(userID); err != nil {
 		return c.JSON(http.StatusBadRequest, ErrorResponse{
@@ -524,7 +461,6 @@ func (h *Handler) Profile(c echo.Context) error {
 			Details: "No user found with the provided ID",
 		})
 	}
-
 	return c.JSON(http.StatusOK, SuccessResponse{
 		Message: "Profile retrieved successfully",
 		Data: map[string]interface{}{
@@ -543,7 +479,6 @@ func (h *Handler) GetProfileByUsername(c echo.Context) error {
 			Details: "Username must be provided in the URL path",
 		})
 	}
-
 	user, err := h.userstore.GetUserByName(username)
 	if err != nil {
 		utils.Logger.Errorf("Error fetching user by username: %v", err)
@@ -560,7 +495,6 @@ func (h *Handler) GetProfileByUsername(c echo.Context) error {
 			Details: "No user found with the provided username",
 		})
 	}
-
 	return c.JSON(http.StatusOK, SuccessResponse{
 		Message: "Profile retrieved successfully",
 		Data: map[string]interface{}{
@@ -568,7 +502,6 @@ func (h *Handler) GetProfileByUsername(c echo.Context) error {
 		},
 	})
 }
-
 // Validation helper methods
 func (h *Handler) validateRegistrationInput(input CreateUser) error {
 	if input.Username == "" {
@@ -580,25 +513,20 @@ func (h *Handler) validateRegistrationInput(input CreateUser) error {
 	if input.Password == "" {
 		return fmt.Errorf("password is required")
 	}
-
 	if err := h.validateUsername(input.Username); err != nil {
 		return err
 	}
-
 	if err := h.validateEmail(input.Email); err != nil {
 		return err
 	}
-
 	if err := h.validatePassword(input.Password); err != nil {
 		return err
 	}
-
 	if input.Bio != nil {
 		if err := h.validateBio(*input.Bio); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -609,7 +537,6 @@ func (h *Handler) validateUsername(username string) error {
 	if len(username) > 30 {
 		return fmt.Errorf("username must be less than 30 characters")
 	}
-
 	// Allow alphanumeric, underscores, and hyphens
 	validUsername := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 	if !validUsername.MatchString(username) {
@@ -643,7 +570,6 @@ func (h *Handler) validatePassword(password string) error {
 	if !hasUpper || !hasLower || !hasDigit || !hasSpecial {
 		return fmt.Errorf("password must contain at least one uppercase letter, lowercase letter, digit, and special character")
 	}
-
 	return nil
 }
 
@@ -661,13 +587,11 @@ func (h *Handler) validateAvatarURL(url string) error {
 	if len(url) > 2048 {
 		return fmt.Errorf("avatar URL must be less than 2048 characters")
 	}
-
 	// Basic URL validation
 	urlRegex := regexp.MustCompile(`^https?://[^\s/$.?#].[^\s]*$`)
 	if !urlRegex.MatchString(url) {
 		return fmt.Errorf("invalid avatar URL format")
 	}
-
 	return nil
 }
 
@@ -675,42 +599,31 @@ func maskEmail(email string) string {
 	if len(email) == 0 {
 		return ""
 	}
-
 	parts := strings.Split(email, "@")
 	if len(parts) != 2 {
 		return email
 	}
-
 	username := parts[0]
 	domain := parts[1]
-
 	if len(username) <= 2 {
 		return username + "@" + domain
 	}
-
 	return username[:2] + "***@" + domain
 }
-
 // LogoutUser handles user logout by clearing authentication cookies
 func (h *Handler) LogoutUser(c echo.Context) error {
-	// Get the current user ID from context (set by middleware)
 	userID, ok := c.Get("user_id").(uuid.UUID)
 	if !ok {
-		// If no user context, just clear cookies anyway
 		utils.Logger.Warn("Logout attempt without valid user context")
 	} else {
 		utils.Logger.Infof("User logout for user ID: %s", userID)
 	}
-
-	// Clear HTTP-only cookies
 	cookieConfig := security.GetCookieConfigForContext(c)
 	security.ClearAuthCookies(c, cookieConfig)
-
 	return c.JSON(http.StatusOK, SuccessResponse{
 		Message: "Logout successful",
 	})
 }
-
 // RefreshToken handles token refresh using the refresh token from cookies
 func (h *Handler) RefreshToken(c echo.Context) error {
 	// Get refresh token from cookie
@@ -748,8 +661,6 @@ func (h *Handler) RefreshToken(c echo.Context) error {
 			Details: "Refresh token is invalid",
 		})
 	}
-
-	// Validate token type
 	if result.Claims.TokenType != "refresh" {
 		return c.JSON(http.StatusUnauthorized, ErrorResponse{
 			Error:   "Invalid token type",
@@ -757,8 +668,6 @@ func (h *Handler) RefreshToken(c echo.Context) error {
 			Details: "Expected refresh token",
 		})
 	}
-
-	// Generate new token pair
 	tokens, err := h.tokenManager.GenerateTokenPair(result.Claims.UserID, result.Claims.SessionID)
 	if err != nil {
 		utils.Logger.Errorf("Failed to generate new tokens: %v", err)
@@ -768,14 +677,268 @@ func (h *Handler) RefreshToken(c echo.Context) error {
 			Details: "Failed to generate new tokens",
 		})
 	}
-
-	// Set new HTTP-only cookies
 	cookieConfig := security.GetCookieConfigForContext(c)
 	security.SetAuthCookies(c, tokens.AccessToken, tokens.RefreshToken, cookieConfig)
-
 	utils.Logger.Infof("Token refreshed successfully for user ID: %s", result.Claims.UserID)
-
 	return c.JSON(http.StatusOK, SuccessResponse{
 		Message: "Token refreshed successfully",
+	})
+}
+
+// Stream Key Management Methods//       
+//                             //
+//                             //
+//                             //
+//                             //
+//                             //
+//                             //
+//                             //
+
+// getUserIDFromContext extracts and validates user ID from context
+func (h *Handler) getUserIDFromContext(c echo.Context) (uuid.UUID, error) {
+	userIDFromContext := c.Get("user_id")
+	if userIDFromContext == nil {
+		return uuid.Nil, fmt.Errorf("user ID not found in context")
+	}
+	var parsedUserID uuid.UUID
+	switch userID := userIDFromContext.(type) {
+	case string:
+		var err error
+		parsedUserID, err = uuid.Parse(userID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("invalid user ID format")
+		}
+	case uuid.UUID:
+		parsedUserID = userID
+	default:
+		return uuid.Nil, fmt.Errorf("invalid user ID type in context")
+	}
+	return parsedUserID, nil
+}
+// GenerateStreamKey generates a new stream key for the authenticated user
+func (h *Handler) GenerateStreamKey(c echo.Context) error {
+	// Get user ID from context (set by authentication middleware)
+	parsedUserID, err := h.getUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "Unauthorized",
+			Code:    "UNAUTHORIZED",
+			Details: err.Error(),
+		})
+	}
+
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := c.Bind(&input); err != nil {
+		utils.Logger.Errorf("Error binding stream key request: %v", err)
+		return c.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "Invalid request format",
+			Code:    "INVALID_REQUEST",
+			Details: "Request body could not be parsed",
+		})
+	}
+	// Validate name
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Name == "" {
+		input.Name = "Default Stream Key"
+	}
+	if len(input.Name) > 100 {
+		return c.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "Stream key name too long",
+			Code:    "VALIDATION_ERROR",
+			Details: "Name must be 100 characters or less",
+		})
+	}
+	// Generate stream key
+	streamKey, err := h.streamService.GenerateStreamKey(parsedUserID, input.Name)
+	if err != nil {
+		utils.Logger.Errorf("Failed to generate stream key for user %s: %v", parsedUserID, err)
+		return c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:   "Failed to generate stream key",
+			Code:    "STREAM_KEY_ERROR",
+			Details: "Unable to create stream key",
+		})
+	}
+	utils.Logger.Infof("Generated stream key %s for user %s", streamKey.ID, parsedUserID)
+	return c.JSON(http.StatusCreated, SuccessResponse{
+		Message: "Stream key generated successfully",
+		Data: map[string]interface{}{
+			"id":         streamKey.ID,
+			"key_value":  streamKey.KeyValue,
+			"name":       streamKey.Name,
+			"is_active":  streamKey.IsActive,
+			"created_at": streamKey.CreatedAt,
+		},
+	})
+}
+
+// GetUserStreamKeys retrieves all stream keys for the authenticated user
+func (h *Handler) GetUserStreamKeys(c echo.Context) error {
+	// Get user ID from context
+	parsedUserID, err := h.getUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "Unauthorized",
+			Code:    "UNAUTHORIZED",
+			Details: err.Error(),
+		})
+	}
+
+	// Get stream keys
+	streamKeys, err := h.streamService.GetStreamKeysByUser(parsedUserID)
+	if err != nil {
+		utils.Logger.Errorf("Failed to get stream keys for user %s: %v", parsedUserID, err)
+		return c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:   "Failed to retrieve stream keys",
+			Code:    "STREAM_KEY_ERROR",
+			Details: "Unable to fetch stream keys",
+		})
+	}
+	// Don't return the actual key values for security
+	var safeStreamKeys []map[string]interface{}
+	for _, key := range streamKeys {
+		safeStreamKeys = append(safeStreamKeys, map[string]interface{}{
+			"id":           key.ID,
+			"name":         key.Name,
+			"is_active":    key.IsActive,
+			"last_used_at": key.LastUsedAt,
+			"created_at":   key.CreatedAt,
+		})
+	}
+	return c.JSON(http.StatusOK, SuccessResponse{
+		Message: "Stream keys retrieved successfully",
+		Data:    safeStreamKeys,
+	})
+}
+
+// GetStreamKey retrieves a specific stream key (without the actual key value)
+func (h *Handler) GetStreamKey(c echo.Context) error {
+	// Get user ID from context
+	parsedUserID, err := h.getUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "Unauthorized",
+			Code:    "UNAUTHORIZED",
+			Details: err.Error(),
+		})
+	}
+	// Get stream key ID from URL parameter
+	keyID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "Invalid stream key ID",
+			Code:    "INVALID_REQUEST",
+			Details: "Stream key ID format is invalid",
+		})
+	}
+	// Get stream key
+	streamKey, err := h.streamService.GetStreamKeyByID(keyID)
+	if err != nil {
+		utils.Logger.Errorf("Failed to get stream key %s: %v", keyID, err)
+		return c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:   "Failed to retrieve stream key",
+			Code:    "STREAM_KEY_ERROR",
+			Details: "Unable to fetch stream key",
+		})
+	}
+
+	if streamKey == nil {
+		return c.JSON(http.StatusNotFound, ErrorResponse{
+			Error:   "Stream key not found",
+			Code:    "NOT_FOUND",
+			Details: "The requested stream key does not exist",
+		})
+	}
+	// Check if the stream key belongs to the authenticated user
+	if streamKey.UserID != parsedUserID {
+		return c.JSON(http.StatusForbidden, ErrorResponse{
+			Error:   "Access denied",
+			Code:    "FORBIDDEN",
+			Details: "You don't have permission to access this stream key",
+		})
+	}
+	// Don't return the actual key value for security
+	return c.JSON(http.StatusOK, SuccessResponse{
+		Message: "Stream key retrieved successfully",
+		Data: map[string]interface{}{
+			"id":           streamKey.ID,
+			"name":         streamKey.Name,
+			"is_active":    streamKey.IsActive,
+			"last_used_at": streamKey.LastUsedAt,
+			"created_at":   streamKey.CreatedAt,
+		},
+	})
+}
+// DeactivateStreamKey deactivates a stream key
+func (h *Handler) DeactivateStreamKey(c echo.Context) error {
+	// Get user ID from context
+	parsedUserID, err := h.getUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "Unauthorized",
+			Code:    "UNAUTHORIZED",
+			Details: err.Error(),
+		})
+	}
+	// Get stream key ID from URL parameter
+	keyID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "Invalid stream key ID",
+			Code:    "INVALID_REQUEST",
+			Details: "Stream key ID format is invalid",
+		})
+	}
+	// Deactivate stream key
+	err = h.streamService.DeactivateStreamKey(keyID, parsedUserID)
+	if err != nil {
+		utils.Logger.Errorf("Failed to deactivate stream key %s for user %s: %v", keyID, parsedUserID, err)
+		return c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:   "Failed to deactivate stream key",
+			Code:    "STREAM_KEY_ERROR",
+			Details: "Unable to deactivate stream key",
+		})
+	}
+
+	utils.Logger.Infof("Deactivated stream key %s for user %s", keyID, parsedUserID)
+
+	return c.JSON(http.StatusOK, SuccessResponse{
+		Message: "Stream key deactivated successfully",
+	})
+}
+// DeleteStreamKey deletes a stream key
+func (h *Handler) DeleteStreamKey(c echo.Context) error {
+	// Get user ID from context
+	parsedUserID, err := h.getUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "Unauthorized",
+			Code:    "UNAUTHORIZED",
+			Details: err.Error(),
+		})
+	}
+	// Get stream key ID from URL parameter
+	keyID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "Invalid stream key ID",
+			Code:    "INVALID_REQUEST",
+			Details: "Stream key ID format is invalid",
+		})
+	}
+	// Delete stream key
+	err = h.streamService.DeleteStreamKey(keyID, parsedUserID)
+	if err != nil {
+		utils.Logger.Errorf("Failed to delete stream key %s for user %s: %v", keyID, parsedUserID, err)
+		return c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:   "Failed to delete stream key",
+			Code:    "STREAM_KEY_ERROR",
+			Details: "Unable to delete stream key",
+		})
+	}
+	utils.Logger.Infof("Deleted stream key %s for user %s", keyID, parsedUserID)
+	return c.JSON(http.StatusOK, SuccessResponse{
+		Message: "Stream key deleted successfully",
 	})
 }
