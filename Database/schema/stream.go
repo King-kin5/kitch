@@ -67,9 +67,6 @@ func CreateStreamsTable(db *sql.DB) error {
 			viewer_count INTEGER DEFAULT 0,
 			started_at TIMESTAMP WITH TIME ZONE,
 			ended_at TIMESTAMP WITH TIME ZONE, 
-			thumbnail_url VARCHAR(2048),
-			rtmp_url VARCHAR(2048),
-			hls_url VARCHAR(2048),
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 		);
