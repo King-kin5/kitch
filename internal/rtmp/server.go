@@ -14,10 +14,250 @@ import (
 	"github.com/nareix/joy5/format/rtmp"
 	"github.com/nareix/joy5/av"
 )
+// NewStreamRelay creates a new stream relay system
+func NewStreamRelay(maxViewers, bufferSize int, packetTimeout time.Duration) *StreamRelay {
+	return &StreamRelay{
+		streams:       make(map[string]*StreamChannel),
+		maxViewers:    maxViewers,
+		bufferSize:    bufferSize,
+		packetTimeout: packetTimeout,
+	}
+}
+// CreateStream creates a new stream channel for a publisher
+func (sr *StreamRelay) CreateStream(streamKey string, publisher *rtmp.Conn, publisherConn net.Conn) *StreamChannel {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
 
+	// Close existing stream if it exists
+	if existing, exists := sr.streams[streamKey]; exists {
+		existing.Close()
+	}
+
+	stream := &StreamChannel{
+		StreamKey:     streamKey,
+		Publisher:     publisher,
+		PublisherConn: publisherConn,
+		Viewers:       make(map[string]*ViewerConnection),
+		PacketChan:    make(chan av.Packet, sr.bufferSize),
+		MetadataChan:  make(chan av.Packet, 10),
+		IsActive:      true,
+		StartTime:     time.Now(),
+		LastPacket:    time.Now(),
+	}
+
+	sr.streams[streamKey] = stream
+	
+	// Start packet distribution goroutine
+	go sr.distributePackets(stream)
+	
+	utils.Logger.Infof("Created stream relay for: %s", streamKey)
+	return stream
+}
+// AddViewer adds a viewer to a stream
+func (sr *StreamRelay) AddViewer(streamKey, viewerID string, viewer *rtmp.Conn, viewerConn net.Conn) error {
+	sr.mu.RLock()
+	stream, exists := sr.streams[streamKey]
+	sr.mu.RUnlock()
+	if !exists || !stream.IsActive {
+		return fmt.Errorf("stream %s not found or not active", streamKey)
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if len(stream.Viewers) >= sr.maxViewers {
+		return fmt.Errorf("viewer limit reached for stream %s", streamKey)
+	}
+	// FIX: Remove variable name conflict - don't redeclare viewerConn
+	viewerConnection := &ViewerConnection{
+		ID:         viewerID,
+		Conn:       viewer,
+		NetConn:    viewerConn, 
+		PacketChan: make(chan av.Packet, sr.bufferSize),
+		JoinTime:   time.Now(),
+		LastPacket: time.Now(),
+		IsActive:   true,
+	}
+	stream.Viewers[viewerID] = viewerConnection
+	// Start viewer packet handler
+	go sr.handleViewerPackets(stream, viewerConnection)
+	// Send recent metadata to new viewer
+	go sr.sendMetadataToViewer(stream, viewerConnection)
+	utils.Logger.Infof("Added viewer %s to stream %s (total viewers: %d)", viewerID, streamKey, len(stream.Viewers))
+	return nil
+}
+// RemoveViewer removes a viewer from a stream
+func (sr *StreamRelay) RemoveViewer(streamKey, viewerID string) {
+	sr.mu.RLock()
+	stream, exists := sr.streams[streamKey]
+	sr.mu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+
+	if viewer, exists := stream.Viewers[viewerID]; exists {
+		viewer.IsActive = false
+		close(viewer.PacketChan)
+		delete(stream.Viewers, viewerID)
+		utils.Logger.Infof("Removed viewer %s from stream %s (remaining viewers: %d)", viewerID, streamKey, len(stream.Viewers))
+	}
+}
+// RelayPacket relays a packet from publisher to all viewers
+func (sr *StreamRelay) RelayPacket(streamKey string, packet av.Packet) error {
+	sr.mu.RLock()
+	stream, exists := sr.streams[streamKey]
+	sr.mu.RUnlock()
+
+	if !exists || !stream.IsActive {
+		return fmt.Errorf("stream %s not found or not active", streamKey)
+	}
+
+	// Update stream stats
+	stream.LastPacket = time.Now()
+	stream.PacketCount++
+
+	// Handle metadata packets separately
+	if packet.Type == av.Metadata {
+		select {
+		case stream.MetadataChan <- packet:
+		default:
+			// Drop metadata if channel is full
+		}
+	}
+
+	// Relay packet to all viewers
+	select {
+	case stream.PacketChan <- packet:
+		return nil
+	default:
+		// Drop packet if channel is full
+		utils.Logger.Warnf("Dropping packet for stream %s - channel full", streamKey)
+		return fmt.Errorf("packet channel full for stream %s", streamKey)
+	}
+}
+// distributePackets distributes packets from the stream channel to all viewers
+func (sr *StreamRelay) distributePackets(stream *StreamChannel) {
+	defer func() {
+		if r := recover(); r != nil {
+			utils.Logger.Errorf("Panic in distributePackets for stream %s: %v", stream.StreamKey, r)
+		}
+	}()
+	for packet := range stream.PacketChan {
+		if !stream.IsActive {
+			break
+		}
+		stream.mu.RLock()
+		viewers := make([]*ViewerConnection, 0, len(stream.Viewers))
+		for _, viewer := range stream.Viewers {
+			if viewer.IsActive {
+				viewers = append(viewers, viewer)
+			}
+		}
+		stream.mu.RUnlock()
+		// FIX: Add packet distribution logging for debugging
+		if len(viewers) > 0 {
+			utils.Logger.Debugf("Distributing packet to %d viewers for stream %s", len(viewers), stream.StreamKey)
+		}
+		// Distribute packet to all active viewers
+		for _, viewer := range viewers {
+			select {
+			case viewer.PacketChan <- packet:
+				viewer.LastPacket = time.Now()
+			default:
+				// Drop packet for this viewer if channel is full
+				utils.Logger.Warnf("Dropping packet for viewer %s - channel full", viewer.ID)
+			}
+		}
+	}
+	utils.Logger.Infof("Stopped packet distribution for stream: %s", stream.StreamKey)
+}
+
+// handleViewerPackets handles sending packets to a specific viewer
+func (sr *StreamRelay) handleViewerPackets(stream *StreamChannel, viewer *ViewerConnection) {
+	defer func() {
+		if r := recover(); r != nil {
+			utils.Logger.Errorf("Panic in handleViewerPackets for viewer %s: %v", viewer.ID, r)
+		}
+		viewer.IsActive = false
+	}()
+	utils.Logger.Infof("Started packet handler for viewer: %s", viewer.ID)
+	for packet := range viewer.PacketChan {
+		if !viewer.IsActive {
+			break
+		}
+		viewer.NetConn.SetWriteDeadline(time.Now().Add(sr.packetTimeout))
+		if err := viewer.Conn.WritePacket(packet); err != nil {
+			utils.Logger.Errorf("Error sending packet to viewer %s: %v", viewer.ID, err)
+			break
+		}
+		utils.Logger.Debugf("Sent packet to viewer %s (type: %d)", viewer.ID, packet.Type)
+	}
+	utils.Logger.Infof("Stopped packet handling for viewer: %s", viewer.ID)
+}
+// sendMetadataToViewer sends recent metadata to a new viewer
+func (sr *StreamRelay) sendMetadataToViewer(stream *StreamChannel, viewer *ViewerConnection) {
+	// Send any available metadata packets
+	for {
+		select {
+		case metadata := <-stream.MetadataChan:
+			if viewer.IsActive {
+				viewer.NetConn.SetWriteDeadline(time.Now().Add(sr.packetTimeout))
+				if err := viewer.Conn.WritePacket(metadata); err != nil {
+					utils.Logger.Errorf("Error sending metadata to viewer %s: %v", viewer.ID, err)
+					return
+				}
+			}
+		default:
+			return
+		}
+	}
+}
+// Close closes a stream channel
+func (sc *StreamChannel) Close() {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if !sc.IsActive {
+		return
+	}
+	sc.IsActive = false
+	// Close all viewer connections
+	for _, viewer := range sc.Viewers {
+		viewer.IsActive = false
+		if viewer.PacketChan != nil {
+			close(viewer.PacketChan)
+		}
+		if viewer.NetConn != nil {
+			viewer.NetConn.Close()
+		}
+	}
+	// Close channels
+	if sc.PacketChan != nil {
+		close(sc.PacketChan)
+	}
+	if sc.MetadataChan != nil {
+		close(sc.MetadataChan)
+	}
+	utils.Logger.Infof("Closed stream channel: %s", sc.StreamKey)
+}
+// GetStreamStats returns statistics for a stream
+func (sc *StreamChannel) GetStreamStats() map[string]interface{} {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+
+	return map[string]interface{}{
+		"stream_key":    sc.StreamKey,
+		"is_active":     sc.IsActive,
+		"start_time":    sc.StartTime,
+		"last_packet":   sc.LastPacket,
+		"packet_count":  sc.PacketCount,
+		"viewer_count":  len(sc.Viewers),
+		"uptime":        time.Since(sc.StartTime).String(),
+	}
+}
 func NewServer(port int, validator StreamValidator) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-
 	config := &Config{
 		Port:              port,
 		ReadTimeout:       30 * time.Second,
@@ -28,7 +268,6 @@ func NewServer(port int, validator StreamValidator) *Server {
 		MaxStreamDuration: 12 * time.Hour,
 		RequireAuth:       true,
 	}
-
 	server := &Server{
 		port:        port,
 		connections: make(map[string]*Connection),
@@ -38,17 +277,15 @@ func NewServer(port int, validator StreamValidator) *Server {
 		cancel:      cancel,
 		config:      config,
 		startTime:   time.Now(),
+		// Initialize stream relay
+		relay: NewStreamRelay(1000, 1000, 5*time.Second),
 	}
-
 	// Create joy5 RTMP server with proper event handlers
 	rtmpSrv := &rtmp.Server{}
 	rtmpSrv.HandleConn = server.handleRTMPConnection
-	
 	server.rtmpSrv = rtmpSrv
-
 	return server
 }
-
 func (s *Server) Start() error {
 	// Create TCP listener
 	listener, err := net.Listen("tcp", ":"+strconv.Itoa(s.config.Port))
@@ -120,7 +357,6 @@ func (s *Server) acceptConnections() {
 func (s *Server) handleRTMPConnection(conn *rtmp.Conn, nc net.Conn) {
 	remoteAddr := nc.RemoteAddr().String()
 	utils.Logger.Infof("New RTMP connection from: %s", remoteAddr)
-	
 	// Generate connection ID
 	connID := fmt.Sprintf("%s-%d", remoteAddr, time.Now().UnixNano())
 	
@@ -145,7 +381,6 @@ func (s *Server) handleRTMPConnection(conn *rtmp.Conn, nc net.Conn) {
 	
 	utils.Logger.Infof("RTMP connection closed: %s", connID)
 }
-
 func (s *Server) handleRTMPSession(conn *rtmp.Conn, nc net.Conn, connID string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -153,42 +388,57 @@ func (s *Server) handleRTMPSession(conn *rtmp.Conn, nc net.Conn, connID string) 
 		}
 	}()
 
-	// Get stream information
 	streamKey := s.extractStreamKey(conn.URL.Path)
 	if streamKey == "" {
 		utils.Logger.Errorf("No stream key found in URL: %s", conn.URL.Path)
 		return
 	}
+	isPublish := false	
+	// Check URL patterns
+	if strings.Contains(conn.URL.Path, "/live/") || 
+	   strings.Contains(conn.URL.Path, "/publish/") ||
+	   strings.Contains(conn.URL.Path, "/stream/") {
+		isPublish = true
+	}
 
-	// Determine if this is a publish or play connection
-	// Check URL path or use connection state to determine type
-	isPublish := strings.Contains(conn.URL.Path, "/live/") || strings.Contains(conn.URL.Path, "/publish/")
-	
+	s.mu.RLock()
+	if streamStatus, exists := s.streams[streamKey]; exists && streamStatus.IsLive {
+		isPublish = false // Stream exists, so this is likely a viewer
+	} else {
+		isPublish = true // No existing stream, so this is likely a publisher
+	}
+	s.mu.RUnlock()
+	utils.Logger.Infof("Connection type determined: %s for stream %s", 
+		map[bool]string{true: "publish", false: "play"}[isPublish], streamKey)
+
 	if isPublish {
 		s.handlePublish(conn, nc, streamKey, connID)
 	} else {
 		s.handlePlay(conn, nc, streamKey, connID)
 	}
 }
-
-// handlePublish handles RTMP publish events (streaming starts)
+// Enhanced handlePublish with relay integration
 func (s *Server) handlePublish(conn *rtmp.Conn, nc net.Conn, streamKey, connID string) {
 	defer func() {
 		if r := recover(); r != nil {
 			utils.Logger.Errorf("Panic in handlePublish: %v", r)
 		}
 		s.handleStreamEnd(streamKey)
+		// Clean up relay stream
+		s.relay.mu.Lock()
+		if stream, exists := s.relay.streams[streamKey]; exists {
+			stream.Close()
+			delete(s.relay.streams, streamKey)
+		}
+		s.relay.mu.Unlock()
 	}()
-
 	utils.Logger.Infof("Publish request for stream key: %s", streamKey)
-
 	// Validate stream key with authentication
 	streamInfo, err := s.validator.ValidateStreamKey(streamKey)
 	if err != nil {
 		utils.Logger.Errorf("Invalid stream key %s: %v", streamKey, err)
 		return
 	}
-
 	// Check if stream is already live
 	s.mu.Lock()
 	if existingStream, exists := s.streams[streamKey]; exists && existingStream.IsLive {
@@ -196,7 +446,6 @@ func (s *Server) handlePublish(conn *rtmp.Conn, nc net.Conn, streamKey, connID s
 		utils.Logger.Errorf("Stream %s is already live", streamKey)
 		return
 	}
-
 	// Create new stream status
 	now := time.Now()
 	streamStatus := &StreamStatus{
@@ -213,9 +462,7 @@ func (s *Server) handlePublish(conn *rtmp.Conn, nc net.Conn, streamKey, connID s
 		Metadata:      make(map[string]interface{}),
 		LastHeartbeat: now,
 	}
-
 	s.streams[streamKey] = streamStatus
-
 	// Update connection type
 	if connection, exists := s.connections[connID]; exists {
 		connection.Type = "publisher"
@@ -223,18 +470,16 @@ func (s *Server) handlePublish(conn *rtmp.Conn, nc net.Conn, streamKey, connID s
 		connection.StreamID = streamInfo.ID
 	}
 	s.mu.Unlock()
-
+	// Create stream relay
+	relayStream := s.relay.CreateStream(streamKey, conn, nc)
 	// Update database
 	if err := s.validator.UpdateStreamStatus(streamKey, true); err != nil {
 		utils.Logger.Errorf("Failed to update stream status in database: %v", err)
 	}
-
 	utils.Logger.Infof("Stream started: %s (User: %s)", streamKey, streamInfo.UserID)
-
-	// Handle stream data processing
-	s.processStreamData(conn, streamKey, streamStatus)
+	// Handle stream data processing with relay
+	s.processStreamData(conn, streamKey, streamStatus, relayStream)
 }
-
 // handlePlay handles RTMP play events (viewer connects)
 func (s *Server) handlePlay(conn *rtmp.Conn, nc net.Conn, streamKey, connID string) {
 	defer func() {
@@ -242,11 +487,9 @@ func (s *Server) handlePlay(conn *rtmp.Conn, nc net.Conn, streamKey, connID stri
 			utils.Logger.Errorf("Panic in handlePlay: %v", r)
 		}
 		s.handleViewerDisconnect(streamKey)
+		s.relay.RemoveViewer(streamKey, connID)
 	}()
-
 	utils.Logger.Infof("Play request for stream key: %s", streamKey)
-
-	// Check if stream exists and is live
 	s.mu.Lock()
 	streamStatus, exists := s.streams[streamKey]
 	if !exists || !streamStatus.IsLive {
@@ -254,43 +497,28 @@ func (s *Server) handlePlay(conn *rtmp.Conn, nc net.Conn, streamKey, connID stri
 		utils.Logger.Errorf("Stream %s is not live", streamKey)
 		return
 	}
-
-	// Increment viewer count
 	streamStatus.ViewerCount++
 	streamStatus.LastHeartbeat = time.Now()
-
-	// Update connection type
 	if connection, exists := s.connections[connID]; exists {
 		connection.Type = "subscriber"
 		connection.StreamKey = streamKey
 	}
 	s.mu.Unlock()
-
-	utils.Logger.Infof("Viewer connected to stream: %s (viewers: %d)", streamKey, streamStatus.ViewerCount)
-
-	// Read from the stream until disconnection
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		default:
-			// Try to read packets - this will block until data is available or connection closes
-			_, err := conn.ReadPacket()
-			if err != nil {
-				utils.Logger.Infof("Viewer disconnected from stream: %s", streamKey)
-				return
-			}
-		}
+	if err := s.relay.AddViewer(streamKey, connID, conn, nc); err != nil {
+		utils.Logger.Errorf("Failed to add viewer to relay: %v", err)
+		return
 	}
+	utils.Logger.Infof("Viewer connected to stream: %s (viewers: %d)", streamKey, streamStatus.ViewerCount)
+	<-s.ctx.Done()
 }
 // processStreamData processes incoming stream data and extracts metadata
-func (s *Server) processStreamData(conn *rtmp.Conn, streamKey string, streamStatus *StreamStatus) {
+func (s *Server) processStreamData(conn *rtmp.Conn, streamKey string, streamStatus *StreamStatus, relayStream *StreamChannel) {
 	defer func() {
 		if r := recover(); r != nil {
-			utils.Logger.Errorf("Panic in processStreamData: %v", r)
+			utils.Logger.Errorf("Panic in processStreamDataWithRelay: %v", r)
 		}
 	}()
-	// Process incoming packets
+	// Process incoming packets and relay them
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -301,9 +529,14 @@ func (s *Server) processStreamData(conn *rtmp.Conn, streamKey string, streamStat
 				utils.Logger.Infof("Publisher disconnected from stream: %s", streamKey)
 				return
 			}
-
+			// Handle packet for metadata extraction
 			if err := s.handlePacket(pkt, streamKey, streamStatus); err != nil {
 				utils.Logger.Errorf("Error handling packet for stream %s: %v", streamKey, err)
+				continue
+			}
+			// Relay packet to all viewers
+			if err := s.relay.RelayPacket(streamKey, pkt); err != nil {
+				utils.Logger.Errorf("Error relaying packet for stream %s: %v", streamKey, err)
 				continue
 			}
 		}
@@ -387,7 +620,6 @@ func (s *Server) handleMetadataPacket(pkt av.Packet, streamKey string, streamSta
 	utils.Logger.Debugf("Received metadata packet for stream %s (size: %d)", streamKey, len(pkt.Data))
 	return nil
 }
-
 func (s *Server) handleStreamEnd(streamKey string) {
 	utils.Logger.Infof("Stream ended: %s", streamKey)
 	s.mu.Lock()
@@ -543,10 +775,10 @@ func (s *Server) Stop() error {
 	utils.Logger.Info("RTMP server stopped gracefully")
 	return nil
 }
-// GetStats returns comprehensive server statistics
 func (s *Server) GetStats() map[string]interface{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	liveStreams := 0
 	totalViewers := 0
 	for _, stream := range s.streams {
@@ -555,6 +787,16 @@ func (s *Server) GetStats() map[string]interface{} {
 			totalViewers += stream.ViewerCount
 		}
 	}
+	// Get relay stats
+	s.relay.mu.RLock()
+	relayStreams := len(s.relay.streams)
+	activeRelayStreams := 0
+	for _, stream := range s.relay.streams {
+		if stream.IsActive {
+			activeRelayStreams++
+		}
+	}
+	s.relay.mu.RUnlock()
 	uptime := time.Since(s.startTime)
 	return map[string]interface{}{
 		"server": map[string]interface{}{
@@ -567,6 +809,12 @@ func (s *Server) GetStats() map[string]interface{} {
 			"total":         len(s.streams),
 			"live":          liveStreams,
 			"total_viewers": totalViewers,
+		},
+		"relay": map[string]interface{}{
+			"total_streams":  relayStreams,
+			"active_streams": activeRelayStreams,
+			"max_viewers":    s.relay.maxViewers,
+			"buffer_size":    s.relay.bufferSize,
 		},
 	}
 }

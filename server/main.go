@@ -84,8 +84,15 @@ func main() {
 	// Setup stream routes
 	setupStreamRoutes(e, securityConfig, streamHandler, postgresDB)
 
+	// Initialize RTMP datastore and validator
+	rtmpDatastore := &rtmp.RTMPDatastore{
+		StreamStore: streamStore,
+	}
+	streamValidator := &rtmp.DatabaseStreamValidator{
+		Datastore: rtmpDatastore,
+	}
 	// Initialize RTMP server
-	rtmpServer := rtmp.NewServer(appConfig.RTMP.Port)
+	rtmpServer := rtmp.NewServer(appConfig.RTMP.Port, streamValidator)
 
 	// Start RTMP server
 	if err := rtmpServer.Start(); err != nil {
@@ -136,15 +143,18 @@ func main() {
 	}
 	utils.Logger.Info("Server shutdown complete")
 }
-//                                                                         //
-//                                                                         //
-//                                                                         //
-//                                                                         //
-  // setupAuthRoutes configures authentication routes
-//                                                                         //
-//                                                                         //
-//                                                                         //
-//                                                                         //
+
+//	//
+//	//
+//	//
+//	//
+//
+// setupAuthRoutes configures authentication routes
+//
+//	//
+//	//
+//	//
+//	//
 func setupAuthRoutes(e *echo.Echo, authHandler *Auth.Handler) {
 	auth := e.Group("/api/v1/auth")
 	auth.POST("/register", authHandler.RegisterUser)
@@ -152,12 +162,13 @@ func setupAuthRoutes(e *echo.Echo, authHandler *Auth.Handler) {
 	auth.POST("/refresh-token", authHandler.RefreshToken)
 	auth.POST("/logout", authHandler.LogoutUser)
 }
+
 //                                                                         //
 //                                                                         //
 //                                                                         //
 //                                                                         //
 //                                                                         //
-  // setupProtectedRoutes configures routes that require authentication//
+// setupProtectedRoutes configures routes that require authentication//
 //                                                                         //
 //                                                                         //
 //                                                                         //
@@ -181,7 +192,7 @@ func setupProtectedRoutes(e *echo.Echo, config *security.Config, authHandler *Au
 
 	//                             //
 	//                             //
-	  //Stream key management routes
+	//Stream key management routes
 	//                             //
 	//                             //
 	users.POST("/stream-keys", authHandler.GenerateStreamKey)
@@ -199,18 +210,21 @@ func setupProtectedRoutes(e *echo.Echo, config *security.Config, authHandler *Au
 	users.DELETE("/stream-keys/:id", authHandler.DeleteStreamKey)
 	utils.Logger.Info("Registered DELETE /api/v1/users/stream-keys/:id endpoint")
 }
-//                                                               //
-//                                                               //
-//                                                               //
-//                                                               //
-//                                                               //
-  //setupRTMPRoutes configures RTMP-related API routes//
-//                                                               //
-//                                                               //
-//                                                               //
-//                                                               //
-//                                                               //
-//                                                               //
+
+//	//
+//	//
+//	//
+//	//
+//	//
+//
+// setupRTMPRoutes configures RTMP-related API routes//
+//
+//	//
+//	//
+//	//
+//	//
+//	//
+//	//
 func setupRTMPRoutes(e *echo.Echo, rtmpHandler *rtmp.Handler) {
 	rtmp := e.Group("/api/v1/rtmp")
 
@@ -229,18 +243,21 @@ func setupRTMPRoutes(e *echo.Echo, rtmpHandler *rtmp.Handler) {
 
 	utils.Logger.Info("Setting up RTMP API routes under /api/v1/rtmp")
 }
-//                                                               //
-//                                                               //
-//                                                               //
-//                                                               //
-//                                                               //
-//                                                               //
-  // setupStreamRoutes configures stream-related API routes//
-//                                                               //
-//                                                               //
-//                                                               //
-//                                                               //
-//                                                               //
+
+//	//
+//	//
+//	//
+//	//
+//	//
+//	//
+//
+// setupStreamRoutes configures stream-related API routes//
+//
+//	//
+//	//
+//	//
+//	//
+//	//
 func setupStreamRoutes(e *echo.Echo, config *security.Config, streamHandler *stream.Handler, db *sql.DB) {
 	// Create the protected group with authentication middleware
 	protected := e.Group("/api/v1/streams")

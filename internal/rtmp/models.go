@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nareix/joy5/av"
 	"github.com/nareix/joy5/format/rtmp"
 )
 
@@ -33,49 +34,20 @@ func (v *DatabaseStreamValidator) UpdateStreamStatus(streamKey string, isLive bo
 
 // StreamInfo contains metadata about a stream
 // Only fields tracked in the schema and used in production are included
+
+// StreamInfo contains information about a validated stream
 type StreamInfo struct {
-	ID          string    `json:"id"`
-	StreamKey   string    `json:"stream_key"`
-	UserID      string    `json:"user_id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Category    string    `json:"category"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string
+	StreamKey   string
+	UserID      string
+	Title       string
+	Description string
+	Category    string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
-// StreamStatus represents the current status of a stream
-type StreamStatus struct {
-	StreamKey     string                 `json:"stream_key"`
-	IsLive        bool                   `json:"is_live"`
-	StartTime     *time.Time             `json:"start_time,omitempty"`
-	EndTime       *time.Time             `json:"end_time,omitempty"`
-	ViewerCount   int                    `json:"viewer_count"`
-	ConnectionID  string                 `json:"connection_id"`
-	PublisherIP   string                 `json:"publisher_ip"`
-	Bitrate       int                    `json:"bitrate"`
-	Resolution    string                 `json:"resolution"`
-	FPS           int                    `json:"fps"`
-	Codec         string                 `json:"codec"`
-	Metadata      map[string]interface{} `json:"metadata"`
-	LastHeartbeat time.Time              `json:"last_heartbeat"`
-}
-
-type Server struct {
-	port        int
-	listener    net.Listener
-	rtmpSrv     *rtmp.Server
-	connections map[string]*Connection
-	streams     map[string]*StreamStatus
-	validator   StreamValidator
-	mu          sync.RWMutex
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	config      *Config
-	startTime   time.Time // Added for uptime tracking
-}
-
+// Config holds server configuration
 type Config struct {
 	Port              int
 	ReadTimeout       time.Duration
@@ -87,26 +59,7 @@ type Config struct {
 	RequireAuth       bool
 }
 
-// Stream struct for RTMP, matching the database-backed Stream struct
-// Only add RTMP-specific fields if absolutely necessary
-type Stream struct {
-	ID           string     `json:"id"`
-	UserID       string     `json:"user_id"`
-	StreamKeyID  string     `json:"stream_key_id"`
-	Title        string     `json:"title"`
-	Description  string     `json:"description"`
-	Category     string     `json:"category"`
-	IsLive       bool       `json:"is_live"`
-	ViewerCount  int        `json:"viewer_count"`
-	StartedAt    *time.Time `json:"started_at"`
-	EndedAt      *time.Time `json:"ended_at"`
-	ThumbnailURL string     `json:"thumbnail_url"`
-	RTMPURL      string     `json:"rtmp_url"`
-	HLSUrl       string     `json:"hls_url"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-}
-
+// Connection represents an active RTMP connection
 type Connection struct {
 	ID        string
 	Conn      net.Conn
@@ -115,6 +68,114 @@ type Connection struct {
 	StreamID  string
 	StartTime time.Time
 	LastPing  time.Time
-	UserAgent string
 	RemoteIP  string
+	UserAgent string
+}
+
+// StreamStatus represents the current status of a stream
+type StreamStatus struct {
+	StreamKey     string
+	IsLive        bool
+	StartTime     *time.Time
+	EndTime       *time.Time
+	ViewerCount   int
+	ConnectionID  string
+	PublisherIP   string
+	Bitrate       int
+	Resolution    string
+	FPS           int
+	Codec         string
+	Metadata      map[string]interface{}
+	LastHeartbeat time.Time
+}
+
+// Server represents the RTMP server
+type Server struct {
+	port        int
+	connections map[string]*Connection
+	streams     map[string]*StreamStatus
+	validator   StreamValidator
+	ctx         context.Context
+	cancel      context.CancelFunc
+	config      *Config
+	startTime   time.Time
+	listener    net.Listener
+	rtmpSrv     *rtmp.Server
+	relay       *StreamRelay
+	mu          sync.RWMutex
+	wg          sync.WaitGroup
+}
+
+// StreamMetrics holds detailed metrics for a stream
+type StreamMetrics struct {
+	StreamKey      string
+	PacketCount    int64
+	BytesReceived  int64
+	BytesForwarded int64
+	ViewerCount    int
+	MaxViewerCount int
+	DroppedPackets int64
+	AverageLatency time.Duration
+	LastPacketTime time.Time
+	QualityMetrics map[string]interface{}
+}
+
+// RelayMetrics holds metrics for the relay system
+type RelayMetrics struct {
+	TotalStreams      int
+	ActiveStreams     int
+	TotalViewers      int
+	PacketsRelayed    int64
+	PacketsDropped    int64
+	BufferUtilization float64
+	AverageLatency    time.Duration
+}
+
+// StreamQuality represents quality metrics for a stream
+type StreamQuality struct {
+	Bitrate          int
+	Resolution       string
+	FPS              int
+	VideoCodec       string
+	AudioCodec       string
+	AudioBitrate     int
+	AudioSampleRate  int
+	KeyFrameInterval int
+	LastUpdate       time.Time
+}
+
+// StreamRelay handles packet distribution between publishers and viewers
+type StreamRelay struct {
+	mu            sync.RWMutex
+	streams       map[string]*StreamChannel
+	maxViewers    int
+	bufferSize    int
+	packetTimeout time.Duration
+}
+
+// StreamChannel represents a stream with its publisher and viewers
+type StreamChannel struct {
+	StreamKey     string
+	Publisher     *rtmp.Conn
+	PublisherConn net.Conn
+	Viewers       map[string]*ViewerConnection
+	PacketChan    chan av.Packet
+	MetadataChan  chan av.Packet
+	IsActive      bool
+	StartTime     time.Time
+	LastPacket    time.Time
+	PacketCount   int64
+	mu            sync.RWMutex
+}
+
+// ViewerConnection represents a viewer connection with buffering
+type ViewerConnection struct {
+	ID         string
+	Conn       *rtmp.Conn
+	NetConn    net.Conn
+	PacketChan chan av.Packet
+	JoinTime   time.Time
+	LastPacket time.Time
+	IsActive   bool
+	mu         sync.RWMutex
 }
